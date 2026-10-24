@@ -1,0 +1,69 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum DeliveryStatus {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  DEAD_LETTERED
+}
+
+model WebhookEndpoint {
+  id               String   @id @default(cuid())
+  url              String
+  secret           String
+  subscribedEvents String[]
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  deliveries Delivery[]
+}
+
+model Event {
+  id             String   @id @default(cuid())
+  eventType      String
+  payload        Json
+  idempotencyKey String   @unique
+  createdAt      DateTime @default(now())
+
+  deliveries Delivery[]
+}
+
+model Delivery {
+  id            String         @id @default(cuid())
+  eventId       String
+  endpointId    String
+  status        DeliveryStatus @default(PENDING)
+  attemptCount  Int            @default(0)
+  nextAttemptAt DateTime?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  event    Event             @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  endpoint WebhookEndpoint   @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+  attempts DeliveryAttempt[]
+
+  @@unique([eventId, endpointId])
+  @@index([status, nextAttemptAt])
+}
+
+model DeliveryAttempt {
+  id             String   @id @default(cuid())
+  deliveryId     String
+  httpStatusCode Int?
+  responseBody   String?
+  errorMessage   String?
+  attemptedAt    DateTime @default(now())
+
+  delivery Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  @@index([deliveryId, attemptedAt])
+}
