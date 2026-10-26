@@ -1,16 +1,33 @@
+
 {
   "name": "webhook-delivery-service",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "A reliable asynchronous webhook delivery service built with Node.js, TypeScript, PostgreSQL, Redis, and BullMQ.",
+  "private": true,
+  "main": "dist/server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "tsx watch src/server.ts",
     "worker": "tsx watch src/workers/delivery.worker.ts",
-    "typecheck": "tsc --noEmit"
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "start:worker": "node dist/workers/delivery.worker.js",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test",
+    "prisma:generate": "prisma generate",
+    "prisma:validate": "prisma validate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:studio": "prisma studio"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "webhooks",
+    "nodejs",
+    "typescript",
+    "bullmq",
+    "redis",
+    "postgresql",
+    "backend",
+    "event-driven-architecture"
+  ],
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
