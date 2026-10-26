@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "worker": "tsx watch src/workers/delivery.worker.ts",
+    "receiver": "node receiver.cjs",
     "build": "tsc",
     "start": "node dist/server.js",
     "start:worker": "node dist/workers/delivery.worker.js",
@@ -22,6 +23,7 @@
     "webhooks",
     "nodejs",
     "typescript",
+    "express",
     "bullmq",
     "redis",
     "postgresql",
