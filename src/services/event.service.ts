@@ -1,7 +1,11 @@
 
-import { Prisma } from "@prisma/client";
+import { Prisma, type Event } from "@prisma/client";
 import prisma from "../config/prisma";
 import { deliveryQueue } from "../config/queue";
+import {
+  DuplicateIdempotencyKeyError,
+  isDuplicateIdempotencyKeyError,
+} from "./event.errors";
 
 interface CreateEventInput {
   eventType: string;
@@ -24,26 +28,35 @@ export async function createEvent(input: CreateEventInput) {
   });
 
   // Save the event and create its delivery records atomically.
-  const event = await prisma.$transaction(async (tx) => {
-    const createdEvent = await tx.event.create({
-      data: {
-        eventType: input.eventType,
-        payload: input.payload as Prisma.InputJsonValue,
-        idempotencyKey: input.idempotencyKey,
-      },
-    });
-
-    if (endpoints.length > 0) {
-      await tx.delivery.createMany({
-        data: endpoints.map((endpoint) => ({
-          eventId: createdEvent.id,
-          endpointId: endpoint.id,
-        })),
+  let event: Event;
+  try {
+    event = await prisma.$transaction(async (tx) => {
+      const createdEvent = await tx.event.create({
+        data: {
+          eventType: input.eventType,
+          payload: input.payload as Prisma.InputJsonValue,
+          idempotencyKey: input.idempotencyKey,
+        },
       });
+
+      if (endpoints.length > 0) {
+        await tx.delivery.createMany({
+          data: endpoints.map((endpoint) => ({
+            eventId: createdEvent.id,
+            endpointId: endpoint.id,
+          })),
+        });
+      }
+
+      return createdEvent;
+    });
+  } catch (error) {
+    if (isDuplicateIdempotencyKeyError(error)) {
+      throw new DuplicateIdempotencyKeyError();
     }
 
-    return createdEvent;
-  });
+    throw error;
+  }
 
   // Queue delivery jobs after the database transaction commits.
   if (endpoints.length > 0) {
