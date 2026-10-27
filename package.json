@@ -13,7 +13,7 @@
     "start": "node dist/server.js",
     "start:worker": "node dist/workers/delivery.worker.js",
     "typecheck": "tsc --noEmit",
-    "test": "node --test",
+    "test": "tsx --test",
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
     "prisma:migrate": "prisma migrate dev",
