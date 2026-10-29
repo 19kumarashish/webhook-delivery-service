@@ -4,13 +4,24 @@ import type { AddressInfo } from "node:net";
 import express from "express";
 import { describe, it } from "node:test";
 import { createDeliveryRouter } from "./delivery.routes";
-import type { getDeliveryById } from "../services/delivery.service";
+import type {
+  getDeliveryAttempts,
+  getDeliveryById,
+} from "../services/delivery.service";
 
 type DeliveryFinder = typeof getDeliveryById;
+type DeliveryAttemptsFinder = typeof getDeliveryAttempts;
 
 async function getDelivery(
   router: ReturnType<typeof createDeliveryRouter>,
   deliveryId = "delivery_123",
+): Promise<Response> {
+  return getDeliveryRoute(router, `/${deliveryId}`);
+}
+
+async function getDeliveryRoute(
+  router: ReturnType<typeof createDeliveryRouter>,
+  path: string,
 ): Promise<Response> {
   const app = express();
   app.use(router);
@@ -24,9 +35,7 @@ async function getDelivery(
   try {
     const address = server.address() as AddressInfo;
 
-    return await fetch(
-      `http://127.0.0.1:${address.port}/${deliveryId}`,
-    );
+    return await fetch(`http://127.0.0.1:${address.port}${path}`);
   } finally {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
@@ -110,5 +119,56 @@ describe("delivery routes", () => {
       error: "Failed to retrieve delivery",
     });
     assert.deepEqual(logged, [internalError]);
+  });
+
+  it("uses the injected attempts finder with validated pagination", async () => {
+    const deliveryFinder: DeliveryFinder = async () => null;
+    const calls: Array<{ deliveryId: string; page: number; limit: number }> = [];
+    const attemptsFinder: DeliveryAttemptsFinder = async (deliveryId, page, limit) => {
+      calls.push({ deliveryId, page, limit });
+      return {
+        attempts: [],
+        pagination: { page, limit, total: 0, totalPages: 0 },
+      };
+    };
+
+    const response = await getDeliveryRoute(
+      createDeliveryRouter(deliveryFinder, console.error, attemptsFinder),
+      "/delivery_123/attempts?page=2&limit=25",
+    );
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      data: [],
+      pagination: { page: 2, limit: 25, total: 0, totalPages: 0 },
+    });
+    assert.deepEqual(calls, [{ deliveryId: "delivery_123", page: 2, limit: 25 }]);
+  });
+
+  it("rejects invalid pagination parameters", async () => {
+    const deliveryFinder: DeliveryFinder = async () => null;
+    const response = await getDeliveryRoute(
+      createDeliveryRouter(deliveryFinder),
+      "/delivery_123/attempts?page=0&limit=101",
+    );
+
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), {
+      error: "page must be a positive integer and limit must be between 1 and 100",
+    });
+  });
+
+  it("returns 404 for attempts when the delivery does not exist", async () => {
+    const deliveryFinder: DeliveryFinder = async () => null;
+    const attemptsFinder: DeliveryAttemptsFinder = async () => null;
+    const response = await getDeliveryRoute(
+      createDeliveryRouter(deliveryFinder, console.error, attemptsFinder),
+      "/delivery_123/attempts",
+    );
+
+    assert.equal(response.status, 404);
+    assert.deepEqual(await response.json(), {
+      error: "Delivery not found",
+    });
   });
 });
