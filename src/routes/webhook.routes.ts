@@ -1,8 +1,10 @@
 import { Router } from "express";
 import { z } from "zod";
-import { createWebhookEndpoint } from "../services/webhook.service";
-
-const router = Router();
+import {
+  createWebhookEndpoint,
+  WebhookUrlValidationError,
+  type WebhookEndpointCreator,
+} from "../services/webhook.service";
 
 const createWebhookSchema = z.object({
   url: z.string().url(),
@@ -12,30 +14,45 @@ const createWebhookSchema = z.object({
     .max(50),
 });
 
-router.post("/", async (req, res) => {
-  const result = createWebhookSchema.safeParse(req.body);
+export function createWebhookRouter(
+  endpointCreator: WebhookEndpointCreator = createWebhookEndpoint,
+  logError: (message: string, error: unknown) => void = console.error,
+) {
+  const router = Router();
 
-  if (!result.success) {
-    return res.status(400).json({
-      error: "Invalid request",
-      details: result.error.issues,
-    });
-  }
+  router.post("/", async (req, res) => {
+    const result = createWebhookSchema.safeParse(req.body);
 
-  try {
-    const endpoint = await createWebhookEndpoint(result.data);
+    if (!result.success) {
+      return res.status(400).json({
+        error: "Invalid request",
+        details: result.error.issues,
+      });
+    }
 
-    return res.status(201).json({
-      message: "Webhook endpoint created successfully",
-      data: endpoint,
-    });
-  } catch (error) {
-    console.error("Failed to create webhook endpoint:", error);
+    try {
+      const endpoint = await endpointCreator(result.data);
 
-    return res.status(500).json({
-      error: "Internal server error",
-    });
-  }
-});
+      return res.status(201).json({
+        message: "Webhook endpoint created successfully",
+        data: endpoint,
+      });
+    } catch (error) {
+      if (error instanceof WebhookUrlValidationError) {
+        return res.status(400).json({
+          error: "Invalid webhook URL: destination is not permitted or could not be resolved",
+        });
+      }
 
-export default router;
+      logError("Failed to create webhook endpoint:", error);
+
+      return res.status(500).json({
+        error: "Internal server error",
+      });
+    }
+  });
+
+  return router;
+}
+
+export default createWebhookRouter();
