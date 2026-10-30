@@ -1,7 +1,8 @@
 
 import { Prisma, type Event } from "@prisma/client";
 import prisma from "../config/prisma";
-import { deliveryQueue } from "../config/queue";
+import { deliveryQueue, retryPolicy } from "../config/queue";
+import { createBullMqRetryOptions } from "../workers/retry-policy";
 import {
   DuplicateIdempotencyKeyError,
   isDuplicateIdempotencyKeyError,
@@ -68,11 +69,7 @@ export async function createEvent(input: CreateEventInput) {
           endpointId: endpoint.id,
         },
         opts: {
-          attempts: 5,
-          backoff: {
-            type: "exponential",
-            delay: 1000,
-          },
+          ...createBullMqRetryOptions(retryPolicy),
           removeOnComplete: 1000,
           removeOnFail: 5000,
         },

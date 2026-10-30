@@ -126,7 +126,7 @@ describe("delivery worker job processing", () => {
     assert.equal(transactions.length, 1);
   });
 
-  it("records delivery failure and status PENDING when retries remain on SSRF rejection", async () => {
+  it("records delivery failure and status FAILED on permanent SSRF rejection", async () => {
     const { mockPrisma, transactions, updates } = createMockPrisma();
 
     const mockDeliverer = async () => {
@@ -139,23 +139,15 @@ describe("delivery worker job processing", () => {
       attemptsMade: 1, // 1 of 3 -> retries remain
     };
 
-    await assert.rejects(
-      async () => {
-        await processDeliveryJob(mockJob as Job<DeliveryJobData>, {
-          prismaClient: mockPrisma,
-          webhookDeliverer: mockDeliverer,
-        });
-      },
-      (err: unknown) => {
-        assert.ok(err instanceof SsrfSecurityError);
-        return true;
-      },
-    );
+    await processDeliveryJob(mockJob as Job<DeliveryJobData>, {
+      prismaClient: mockPrisma,
+      webhookDeliverer: mockDeliverer,
+    });
 
-    // Verify attempt recorded SSRF error and delivery remained PENDING
+    // Permanent security failures must not be retried.
     assert.equal(updates[0].data.status, "PROCESSING");
     const lastUpdate = updates[updates.length - 1];
-    assert.equal(lastUpdate.data.status, "PENDING");
+    assert.equal(lastUpdate.data.status, "FAILED");
     assert.equal(transactions.length, 1);
   });
 
@@ -172,19 +164,10 @@ describe("delivery worker job processing", () => {
       attemptsMade: 3, // Final attempt -> exhausted
     };
 
-    await assert.rejects(
-      async () => {
-        await processDeliveryJob(mockJob as Job<DeliveryJobData>, {
-          prismaClient: mockPrisma,
-          webhookDeliverer: mockDeliverer,
-        });
-      },
-      (err: unknown) => {
-        assert.ok(err instanceof HttpDeliveryError);
-        assert.equal(err.statusCode, 302);
-        return true;
-      },
-    );
+    await processDeliveryJob(mockJob as Job<DeliveryJobData>, {
+      prismaClient: mockPrisma,
+      webhookDeliverer: mockDeliverer,
+    });
 
     const lastUpdate = updates[updates.length - 1];
     assert.equal(lastUpdate.data.status, "FAILED");

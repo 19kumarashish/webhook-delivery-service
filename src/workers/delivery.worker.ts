@@ -3,10 +3,12 @@ import { Worker, type Job } from "bullmq";
 import { createHmac } from "node:crypto";
 import prisma from "../config/prisma";
 import redis from "../config/redis";
-import { hasRetriesExhausted } from "./retry-policy";
+import { calculateRetryDelay, hasRetriesExhausted } from "./retry-policy";
+import { retryPolicy } from "../config/queue";
 import {
   sendWebhookRequest,
   HttpDeliveryError,
+  SsrfSecurityError,
   type SendWebhookRequestOptions,
   type WebhookDeliveryResponse,
 } from "../services/webhook-http-client";
@@ -24,6 +26,23 @@ export type WebhookDeliverer = (
 export interface ProcessDeliveryDependencies {
   prismaClient?: typeof prisma;
   webhookDeliverer?: WebhookDeliverer;
+}
+
+export function isPermanentDeliveryFailure(error: unknown): boolean {
+  if (error instanceof SsrfSecurityError) {
+    return true;
+  }
+  if (error instanceof HttpDeliveryError) {
+    const status = error.statusCode;
+    return (
+      (status >= 300 && status < 400) ||
+      (status >= 400 &&
+        status < 500 &&
+        status !== 408 &&
+        status !== 429)
+    );
+  }
+  return false;
 }
 
 export async function processDeliveryJob(
@@ -126,10 +145,12 @@ export async function processDeliveryJob(
       error instanceof Error ? error.message : "Unknown delivery error";
 
     const maxAttempts = job.opts.attempts ?? 1;
+    const permanentFailure = isPermanentDeliveryFailure(error);
     const retriesExhausted = hasRetriesExhausted(
       job.attemptsMade,
       maxAttempts,
     );
+    const finalFailure = permanentFailure || retriesExhausted;
 
     await db.$transaction([
       db.deliveryAttempt.create({
@@ -143,13 +164,16 @@ export async function processDeliveryJob(
       db.delivery.update({
         where: { id: delivery.id },
         data: {
-          status: retriesExhausted ? "FAILED" : "PENDING",
+          status: finalFailure ? "FAILED" : "PENDING",
           nextAttemptAt: null,
         },
       }),
     ]);
 
-    throw error;
+    if (!permanentFailure) {
+      throw error;
+    }
+    return;
   }
 
   // Persist success outside the HTTP catch so database errors
@@ -183,6 +207,10 @@ export function createDeliveryWorker(
     {
       connection: redisClient,
       concurrency: 5,
+      settings: {
+        backoffStrategy: (attemptsMade: number) =>
+          calculateRetryDelay(attemptsMade, retryPolicy),
+      },
     },
   );
 
