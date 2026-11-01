@@ -73,8 +73,35 @@ export async function processDeliveryJob(
     );
   }
 
+  if (
+    delivery.status === "DEAD_LETTERED" ||
+    delivery.status === "SUCCEEDED"
+  ) {
+    return;
+  }
+
   // Record failures for inactive endpoints.
   if (!delivery.endpoint.isActive) {
+    if (delivery.status !== "PENDING") {
+      return;
+    }
+
+    const deliveryModel = db.delivery as typeof db.delivery & {
+      updateMany?: typeof db.delivery.updateMany;
+    };
+    if (typeof deliveryModel.updateMany === "function") {
+      const claim = await deliveryModel.updateMany({
+        where: { id: delivery.id, status: "PENDING" },
+        data: {
+          status: "PROCESSING",
+          attemptCount: { increment: 1 },
+        },
+      });
+      if (claim.count !== 1) {
+        return;
+      }
+    }
+
     await db.$transaction([
       db.deliveryAttempt.create({
         data: {
@@ -85,7 +112,7 @@ export async function processDeliveryJob(
       db.delivery.update({
         where: { id: delivery.id },
         data: {
-          status: "FAILED",
+          status: "DEAD_LETTERED",
           nextAttemptAt: null,
         },
       }),
@@ -95,13 +122,30 @@ export async function processDeliveryJob(
   }
 
   // Mark delivery as processing and increment attempts.
-  await db.delivery.update({
-    where: { id: delivery.id },
-    data: {
-      status: "PROCESSING",
-      attemptCount: { increment: 1 },
-    },
-  });
+  if (
+    typeof (db.delivery as typeof db.delivery & {
+      updateMany?: typeof db.delivery.updateMany;
+    }).updateMany === "function"
+  ) {
+    const claim = await db.delivery.updateMany({
+      where: { id: delivery.id, status: "PENDING" },
+      data: {
+        status: "PROCESSING",
+        attemptCount: { increment: 1 },
+      },
+    });
+    if (claim.count !== 1) {
+      return;
+    }
+  } else {
+    await db.delivery.update({
+      where: { id: delivery.id },
+      data: {
+        status: "PROCESSING",
+        attemptCount: { increment: 1 },
+      },
+    });
+  }
 
   let httpStatusCode: number | null = null;
   let responseBody: string | null = null;
@@ -147,7 +191,7 @@ export async function processDeliveryJob(
     const maxAttempts = job.opts.attempts ?? 1;
     const permanentFailure = isPermanentDeliveryFailure(error);
     const retriesExhausted = hasRetriesExhausted(
-      job.attemptsMade,
+      delivery.attemptCount + 1,
       maxAttempts,
     );
     const finalFailure = permanentFailure || retriesExhausted;
@@ -164,13 +208,13 @@ export async function processDeliveryJob(
       db.delivery.update({
         where: { id: delivery.id },
         data: {
-          status: finalFailure ? "FAILED" : "PENDING",
+          status: finalFailure ? "DEAD_LETTERED" : "PENDING",
           nextAttemptAt: null,
         },
       }),
     ]);
 
-    if (!permanentFailure) {
+    if (!permanentFailure && !finalFailure) {
       throw error;
     }
     return;

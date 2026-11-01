@@ -126,7 +126,7 @@ describe("delivery worker job processing", () => {
     assert.equal(transactions.length, 1);
   });
 
-  it("records delivery failure and status FAILED on permanent SSRF rejection", async () => {
+  it("moves a permanent SSRF rejection into the dead-letter queue", async () => {
     const { mockPrisma, transactions, updates } = createMockPrisma();
 
     const mockDeliverer = async () => {
@@ -147,11 +147,11 @@ describe("delivery worker job processing", () => {
     // Permanent security failures must not be retried.
     assert.equal(updates[0].data.status, "PROCESSING");
     const lastUpdate = updates[updates.length - 1];
-    assert.equal(lastUpdate.data.status, "FAILED");
+    assert.equal(lastUpdate.data.status, "DEAD_LETTERED");
     assert.equal(transactions.length, 1);
   });
 
-  it("records delivery failure and status FAILED when retries are exhausted on 3xx redirect", async () => {
+  it("moves retry exhaustion on a 3xx redirect into the dead-letter queue", async () => {
     const { mockPrisma, transactions, updates } = createMockPrisma();
 
     const mockDeliverer = async () => {
@@ -170,7 +170,7 @@ describe("delivery worker job processing", () => {
     });
 
     const lastUpdate = updates[updates.length - 1];
-    assert.equal(lastUpdate.data.status, "FAILED");
+    assert.equal(lastUpdate.data.status, "DEAD_LETTERED");
     assert.equal(transactions.length, 1);
   });
 
@@ -198,7 +198,51 @@ describe("delivery worker job processing", () => {
     });
 
     assert.equal(delivererCalled, false);
-    assert.equal(updates[0].data.status, "FAILED");
+    assert.equal(updates[0].data.status, "DEAD_LETTERED");
     assert.equal(transactions.length, 1);
+  });
+
+  it("moves a final 5xx retry into the dead-letter queue", async () => {
+    const exhaustedDelivery = { ...mockDelivery, attemptCount: 4 };
+    const { mockPrisma, attempts, updates } = createMockPrisma(exhaustedDelivery);
+
+    const mockJob: Partial<Job<DeliveryJobData>> = {
+      data: { eventId: "evt_123", endpointId: "ep_123" },
+      opts: { attempts: 5 },
+      attemptsMade: 4,
+    };
+
+    await processDeliveryJob(mockJob as Job<DeliveryJobData>, {
+      prismaClient: mockPrisma,
+      webhookDeliverer: async () => {
+        throw new HttpDeliveryError(500, "Internal Server Error");
+      },
+    });
+
+    assert.equal(updates[updates.length - 1].data.status, "DEAD_LETTERED");
+    assert.equal(attempts.length, 1);
+    assert.equal(attempts[0].data.httpStatusCode, 500);
+  });
+
+  it("does not process or duplicate an already dead-lettered delivery", async () => {
+    const deadDelivery = { ...mockDelivery, status: "DEAD_LETTERED" };
+    const { mockPrisma, transactions, attempts } = createMockPrisma(deadDelivery);
+    let delivererCalled = false;
+
+    await processDeliveryJob({
+      data: { eventId: "evt_123", endpointId: "ep_123" },
+      opts: { attempts: 5 },
+      attemptsMade: 5,
+    } as Job<DeliveryJobData>, {
+      prismaClient: mockPrisma,
+      webhookDeliverer: async () => {
+        delivererCalled = true;
+        return { statusCode: 200, body: "ok" };
+      },
+    });
+
+    assert.equal(delivererCalled, false);
+    assert.equal(attempts.length, 0);
+    assert.equal(transactions.length, 0);
   });
 });

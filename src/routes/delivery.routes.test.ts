@@ -56,6 +56,12 @@ describe("delivery routes", () => {
         id: "event_123",
         eventType: "order.paid",
         createdAt: new Date("2026-10-29T09:59:00.000Z"),
+        payload: { amount: 5000 },
+      },
+      endpoint: {
+        id: "endpoint_123",
+        url: "https://example.com/webhooks",
+        isActive: true,
       },
       attempts: [
         {
