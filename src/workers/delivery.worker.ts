@@ -191,7 +191,7 @@ export async function processDeliveryJob(
     const maxAttempts = job.opts.attempts ?? 1;
     const permanentFailure = isPermanentDeliveryFailure(error);
     const retriesExhausted = hasRetriesExhausted(
-      delivery.attemptCount + 1,
+      job.attemptsMade,
       maxAttempts,
     );
     const finalFailure = permanentFailure || retriesExhausted;

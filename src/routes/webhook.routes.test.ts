@@ -34,6 +34,7 @@ async function postWebhookEndpoint(
     });
   } finally {
     await new Promise<void>((resolve, reject) => {
+      server.closeAllConnections?.();
       server.close((error) => (error ? reject(error) : resolve()));
     });
   }

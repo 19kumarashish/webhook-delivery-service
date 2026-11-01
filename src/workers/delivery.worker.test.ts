@@ -209,7 +209,7 @@ describe("delivery worker job processing", () => {
     const mockJob: Partial<Job<DeliveryJobData>> = {
       data: { eventId: "evt_123", endpointId: "ep_123" },
       opts: { attempts: 5 },
-      attemptsMade: 4,
+      attemptsMade: 5,
     };
 
     await processDeliveryJob(mockJob as Job<DeliveryJobData>, {

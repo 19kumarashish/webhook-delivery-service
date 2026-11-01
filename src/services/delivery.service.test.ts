@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { after, describe, it } from "node:test";
+import { describe, it } from "node:test";
 import {
   DeadLetterNotEligibleError,
   DeadLetterNotFoundError,
@@ -7,14 +7,6 @@ import {
   listDeadLetteredDeliveries,
   replayDeadLetteredDelivery,
 } from "./delivery.service";
-import { deliveryQueue } from "../config/queue";
-import redis from "../config/redis";
-
-after(async () => {
-  await deliveryQueue.close();
-  await redis.quit();
-});
-
 describe("dead-letter delivery service", () => {
   const deadDelivery = {
     id: "delivery_1",
@@ -151,5 +143,61 @@ describe("dead-letter delivery service", () => {
       }),
       DeadLetterReplayConflictError,
     );
+  });
+
+  it("rolls replay state back when queue insertion fails", async () => {
+    const updates: any[] = [];
+    const db: any = {
+      delivery: {
+        findUnique: async () => deadDelivery,
+        updateMany: async (args: any) => {
+          updates.push(args);
+          return { count: 1 };
+        },
+      },
+      $transaction: async (callback: (tx: any) => Promise<unknown>) =>
+        await callback(db),
+    };
+    const queue: any = {
+      add: async () => {
+        throw new Error("Redis queue unavailable");
+      },
+    };
+
+    await assert.rejects(
+      replayDeadLetteredDelivery("delivery_1", {
+        prismaClient: db,
+        queueClient: queue,
+        urlValidator: async () => true,
+      }),
+      /Redis queue unavailable/,
+    );
+
+    assert.equal(updates.length, 2);
+    assert.equal(updates[0].data.status, "PENDING");
+    assert.equal(updates[1].where.status, "PENDING");
+    assert.equal(updates[1].data.status, "DEAD_LETTERED");
+  });
+
+  it("does not create or reset attempt history during replay", async () => {
+    const db: any = {
+      delivery: {
+        findUnique: async () => deadDelivery,
+        updateMany: async () => ({ count: 1 }),
+      },
+      deliveryAttempt: {
+        create: async () => {
+          throw new Error("Replay must not create a separate attempt history row");
+        },
+      },
+      $transaction: async (callback: (tx: any) => Promise<unknown>) =>
+        await callback(db),
+    };
+
+    await replayDeadLetteredDelivery("delivery_1", {
+      prismaClient: db,
+      queueClient: { add: async () => undefined } as any,
+      urlValidator: async () => true,
+    });
   });
 });

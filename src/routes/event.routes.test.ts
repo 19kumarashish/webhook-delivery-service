@@ -2,18 +2,9 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import express from "express";
-import { after, describe, it } from "node:test";
+import { describe, it } from "node:test";
 import { createEventRouter } from "./event.routes";
-import prisma from "../config/prisma";
-import { deliveryQueue } from "../config/queue";
-import redis from "../config/redis";
 import { DuplicateIdempotencyKeyError } from "../services/event.errors";
-
-after(async () => {
-  await deliveryQueue.close();
-  await redis.quit();
-  await prisma.$disconnect();
-});
 
 async function postEvent(
   router: ReturnType<typeof createEventRouter>,
@@ -40,6 +31,7 @@ async function postEvent(
     });
   } finally {
     await new Promise<void>((resolve, reject) => {
+      server.closeAllConnections?.();
       server.close((error) => (error ? reject(error) : resolve()));
     });
   }

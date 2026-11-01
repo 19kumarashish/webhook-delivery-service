@@ -21,6 +21,9 @@ afterEach(async () => {
   await Promise.all(
     servers.splice(0).map(
       (server) => new Promise((resolve, reject) => {
+        if (typeof server.closeAllConnections === "function") {
+          server.closeAllConnections();
+        }
         server.close((error) => (error ? reject(error) : resolve()));
       }),
     ),

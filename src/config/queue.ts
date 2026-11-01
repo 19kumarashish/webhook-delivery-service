@@ -8,6 +8,21 @@ import {
 
 export const retryPolicy: RetryPolicy = retryPolicyFromEnvironment();
 
-export const deliveryQueue = new Queue("webhook-deliveries", {
-  connection: redis,
+let deliveryQueueInstance: Queue | null = null;
+
+export function getDeliveryQueue(): Queue {
+  if (!deliveryQueueInstance) {
+    deliveryQueueInstance = new Queue("webhook-deliveries", {
+      connection: redis,
+    });
+  }
+  return deliveryQueueInstance;
+}
+
+export const deliveryQueue = new Proxy({} as Queue, {
+  get(_target, property, receiver) {
+    const queue = getDeliveryQueue();
+    const value = Reflect.get(queue, property, receiver);
+    return typeof value === "function" ? value.bind(queue) : value;
+  },
 });
