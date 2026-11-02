@@ -12,7 +12,7 @@
     "start": "node dist/server.js",
     "start:worker": "node dist/workers/delivery.worker.js",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/config/logger.test.ts src/services/delivery.service.test.ts src/services/event.errors.test.ts src/services/webhook-http-client.test.ts src/services/webhook-url.test.ts src/routes/delivery.routes.test.ts src/routes/event.routes.test.ts src/routes/webhook.routes.test.ts src/workers/delivery.worker.test.ts src/workers/retry-policy.test.ts receiver.test.cjs",
+    "test": "tsx --test src/config/logger.test.ts src/logging/context.test.ts src/middleware/request-context.middleware.test.ts src/services/delivery.service.test.ts src/services/event.errors.test.ts src/services/webhook-http-client.test.ts src/services/webhook-url.test.ts src/routes/delivery.routes.test.ts src/routes/event.routes.test.ts src/routes/webhook.routes.test.ts src/workers/delivery.worker.test.ts src/workers/retry-policy.test.ts receiver.test.cjs",
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
     "prisma:migrate": "prisma migrate dev",
