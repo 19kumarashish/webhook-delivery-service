@@ -1,10 +1,12 @@
 import express from "express";
+import { requestContextMiddleware } from "./middleware/request-context.middleware";
 import webhookRoutes from "./routes/webhook.routes";
 import eventRoutes from "./routes/event.routes";
 import deliveryRoutes from "./routes/delivery.routes";
 
 const app = express();
 
+app.use(requestContextMiddleware);
 app.use(express.json({ limit: "1mb" }));
 
 app.get("/health", (_req, res) => {
