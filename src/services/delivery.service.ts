@@ -3,6 +3,8 @@ import prisma from "../config/prisma";
 import { deliveryQueue, retryPolicy } from "../config/queue";
 import { createBullMqRetryOptions } from "../workers/retry-policy";
 import { validateWebhookUrl } from "./webhook-url";
+import { logger } from "../config/logger";
+import { getLogContext } from "../logging/context";
 
 export class DeadLetterReplayError extends Error {
   constructor(message: string) {
@@ -106,6 +108,7 @@ export interface ReplayDeadLetterDependencies {
   prismaClient?: typeof prisma;
   queueClient?: typeof deliveryQueue;
   urlValidator?: typeof validateWebhookUrl;
+  logger?: Pick<typeof logger, "info">;
 }
 
 export async function replayDeadLetteredDelivery(
@@ -115,6 +118,10 @@ export async function replayDeadLetteredDelivery(
   const db = dependencies.prismaClient ?? prisma;
   const queue = dependencies.queueClient ?? deliveryQueue;
   const urlValidator = dependencies.urlValidator ?? validateWebhookUrl;
+  const replayLogger = dependencies.logger ?? logger;
+  const logContext = getLogContext();
+  const requestId = logContext?.requestId;
+  const correlationId = logContext?.correlationId ?? requestId;
 
   const delivery = await db.delivery.findUnique({
     where: { id: deliveryId },
@@ -168,6 +175,9 @@ export async function replayDeadLetteredDelivery(
       {
         eventId: delivery.eventId,
         endpointId: delivery.endpointId,
+        deliveryId,
+        ...(requestId ? { requestId } : {}),
+        ...(correlationId ? { correlationId } : {}),
       },
       {
         ...createBullMqRetryOptions(retryPolicy),
@@ -176,6 +186,13 @@ export async function replayDeadLetteredDelivery(
         removeOnFail: 5000,
       },
     );
+    replayLogger.info({
+      requestId,
+      correlationId,
+      eventId: delivery.eventId,
+      deliveryId,
+      endpointId: delivery.endpointId,
+    }, "dead_letter_delivery_requeued");
   } catch (error) {
     await db.delivery.updateMany({
       where: { id: deliveryId, status: "PENDING" },

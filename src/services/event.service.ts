@@ -3,6 +3,8 @@ import { Prisma, type Event } from "@prisma/client";
 import prisma from "../config/prisma";
 import { deliveryQueue, retryPolicy } from "../config/queue";
 import { createBullMqRetryOptions } from "../workers/retry-policy";
+import { logger } from "../config/logger";
+import { getLogContext, updateLogContext } from "../logging/context";
 import {
   DuplicateIdempotencyKeyError,
   isDuplicateIdempotencyKeyError,
@@ -14,9 +16,25 @@ interface CreateEventInput {
   idempotencyKey: string;
 }
 
-export async function createEvent(input: CreateEventInput) {
+export interface CreateEventDependencies {
+  prismaClient?: typeof prisma;
+  queueClient?: typeof deliveryQueue;
+  logger?: Pick<typeof logger, "info">;
+}
+
+export async function createEvent(
+  input: CreateEventInput,
+  dependencies: CreateEventDependencies = {},
+) {
+  const db = dependencies.prismaClient ?? prisma;
+  const queue = dependencies.queueClient ?? deliveryQueue;
+  const eventLogger = dependencies.logger ?? logger;
+  const logContext = getLogContext();
+  const requestId = logContext?.requestId;
+  const correlationId = logContext?.correlationId ?? requestId;
+
   // Find endpoints subscribed to this event.
-  const endpoints = await prisma.webhookEndpoint.findMany({
+  const endpoints = await db.webhookEndpoint.findMany({
     where: {
       isActive: true,
       subscribedEvents: {
@@ -31,7 +49,7 @@ export async function createEvent(input: CreateEventInput) {
   // Save the event and create its delivery records atomically.
   let event: Event;
   try {
-    event = await prisma.$transaction(async (tx) => {
+    event = await db.$transaction(async (tx) => {
       const createdEvent = await tx.event.create({
         data: {
           eventType: input.eventType,
@@ -59,14 +77,25 @@ export async function createEvent(input: CreateEventInput) {
     throw error;
   }
 
+  updateLogContext({ eventId: event.id });
+  eventLogger.info({
+    ...logContext,
+    requestId,
+    correlationId,
+    eventId: event.id,
+    matchedEndpoints: endpoints.length,
+  }, "event_ingested");
+
   // Queue delivery jobs after the database transaction commits.
   if (endpoints.length > 0) {
-    await deliveryQueue.addBulk(
+    await queue.addBulk(
       endpoints.map((endpoint) => ({
         name: "deliver-webhook",
         data: {
           eventId: event.id,
           endpointId: endpoint.id,
+          ...(correlationId ? { correlationId } : {}),
+          ...(requestId ? { requestId } : {}),
         },
         opts: {
           ...createBullMqRetryOptions(retryPolicy),
@@ -75,6 +104,15 @@ export async function createEvent(input: CreateEventInput) {
         },
       })),
     );
+
+    for (const endpoint of endpoints) {
+      eventLogger.info({
+        requestId,
+        correlationId,
+        eventId: event.id,
+        endpointId: endpoint.id,
+      }, "event_delivery_queued");
+    }
   }
 
   return {

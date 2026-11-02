@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { runWithLogContext } from "../logging/context";
 import {
   DeadLetterNotEligibleError,
   DeadLetterNotFoundError,
@@ -82,8 +83,41 @@ describe("dead-letter delivery service", () => {
     assert.deepEqual(queueAdds[0][1], {
       eventId: "event_1",
       endpointId: "endpoint_1",
+      deliveryId: "delivery_1",
     });
     assert.match(queueAdds[0][2].jobId, /^delivery:delivery_1:replay:/);
+  });
+
+  it("propagates replay correlation context and delivery ID to the queue", async () => {
+    const queueAdds: any[] = [];
+    const db: any = {
+      delivery: {
+        findUnique: async () => deadDelivery,
+        updateMany: async () => ({ count: 1 }),
+      },
+      $transaction: async (callback: (tx: any) => Promise<unknown>) =>
+        await callback(db),
+    };
+    const queue: any = {
+      add: async (...args: any[]) => queueAdds.push(args),
+    };
+
+    await runWithLogContext(
+      { requestId: "replay-request", correlationId: "trace-original" },
+      () => replayDeadLetteredDelivery("delivery_1", {
+        prismaClient: db,
+        queueClient: queue,
+        urlValidator: async () => true,
+      }),
+    );
+
+    assert.deepEqual(queueAdds[0][1], {
+      eventId: "event_1",
+      endpointId: "endpoint_1",
+      deliveryId: "delivery_1",
+      requestId: "replay-request",
+      correlationId: "trace-original",
+    });
   });
 
   it("rejects replay when the delivery is missing or not dead-lettered", async () => {

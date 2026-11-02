@@ -16,6 +16,9 @@ import {
 export interface DeliveryJobData {
   eventId: string;
   endpointId: string;
+  deliveryId?: string;
+  requestId?: string;
+  correlationId?: string;
 }
 
 export type WebhookDeliverer = (
