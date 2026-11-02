@@ -5,6 +5,8 @@ import prisma from "../config/prisma";
 import redis from "../config/redis";
 import { calculateRetryDelay, hasRetriesExhausted } from "./retry-policy";
 import { retryPolicy } from "../config/queue";
+import { logger, serializeError } from "../config/logger";
+import { runWithLogContext, updateLogContext } from "../logging/context";
 import {
   sendWebhookRequest,
   HttpDeliveryError,
@@ -12,6 +14,22 @@ import {
   type SendWebhookRequestOptions,
   type WebhookDeliveryResponse,
 } from "../services/webhook-http-client";
+
+const retryableProcessorRecordedErrors = new WeakSet<object>();
+
+function markDeliveryProcessorFailure(error: unknown): void {
+  if (typeof error === "object" && error !== null) {
+    retryableProcessorRecordedErrors.add(error);
+  }
+}
+
+function wasDeliveryProcessorRecorded(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    retryableProcessorRecordedErrors.has(error)
+  );
+}
 
 export interface DeliveryJobData {
   eventId: string;
@@ -29,6 +47,47 @@ export type WebhookDeliverer = (
 export interface ProcessDeliveryDependencies {
   prismaClient?: typeof prisma;
   webhookDeliverer?: WebhookDeliverer;
+  logger?: {
+    info: (fields: Record<string, unknown>, message: string) => unknown;
+    warn: (fields: Record<string, unknown>, message: string) => unknown;
+  };
+  now?: () => bigint;
+}
+
+export interface DeliveryWorkerLogger {
+  error: (fields: Record<string, unknown>, message: string) => unknown;
+  warn: (fields: Record<string, unknown>, message: string) => unknown;
+}
+
+export function registerDeliveryWorkerListeners(
+  worker: Worker<DeliveryJobData>,
+  workerLogger: DeliveryWorkerLogger = logger,
+): void {
+  worker.on("error", (error) => {
+    workerLogger.error({
+      error: serializeError(error),
+    }, "worker_error");
+  });
+
+  worker.on("failed", (job, error) => {
+    if (wasDeliveryProcessorRecorded(error)) {
+      return;
+    }
+
+    const data = job?.data;
+    workerLogger.warn({
+      ...(data?.requestId ? { requestId: data.requestId } : {}),
+      ...(data?.correlationId || data?.requestId
+        ? { correlationId: data.correlationId ?? data.requestId }
+        : {}),
+      ...(data?.eventId ? { eventId: data.eventId } : {}),
+      ...(data?.endpointId ? { endpointId: data.endpointId } : {}),
+      ...(data?.deliveryId ? { deliveryId: data.deliveryId } : {}),
+      jobId: job?.id,
+      attemptNumber: (job?.attemptsMade ?? 0) + 1,
+      error: serializeError(error),
+    }, "worker_job_failed");
+  });
 }
 
 export function isPermanentDeliveryFailure(error: unknown): boolean {
@@ -52,8 +111,30 @@ export async function processDeliveryJob(
   job: Job<DeliveryJobData>,
   dependencies: ProcessDeliveryDependencies = {},
 ) {
+  const { eventId, endpointId, deliveryId, requestId } = job.data;
+  const correlationId = job.data.correlationId ?? requestId;
+
+  return runWithLogContext(
+    {
+      ...(requestId ? { requestId } : {}),
+      ...(correlationId ? { correlationId } : {}),
+      eventId,
+      endpointId,
+      ...(deliveryId ? { deliveryId } : {}),
+    },
+    () => processDeliveryJobWithContext(job, dependencies),
+  );
+}
+
+async function processDeliveryJobWithContext(
+  job: Job<DeliveryJobData>,
+  dependencies: ProcessDeliveryDependencies,
+) {
   const db = dependencies.prismaClient ?? prisma;
   const deliverer = dependencies.webhookDeliverer ?? sendWebhookRequest;
+  const deliveryLogger = dependencies.logger ?? logger;
+  const now = dependencies.now ?? (() => process.hrtime.bigint());
+  const startedAt = now();
   const { eventId, endpointId } = job.data;
 
   // Load the event and destination.
@@ -82,6 +163,30 @@ export async function processDeliveryJob(
   ) {
     return;
   }
+
+  updateLogContext({
+    eventId,
+    endpointId,
+    deliveryId: delivery.id,
+  });
+
+  const attemptNumber = (job.attemptsMade ?? 0) + 1;
+  const maxAttempts = job.opts?.attempts ?? 1;
+  const lifecycleFields = () => ({
+    requestId: job.data.requestId,
+    correlationId: job.data.correlationId ?? job.data.requestId,
+    eventId,
+    deliveryId: delivery.id,
+    endpointId,
+    attemptNumber,
+  });
+  const durationMs = () =>
+    Math.max(0, Number(now() - startedAt) / 1_000_000);
+
+  deliveryLogger.info({
+    ...lifecycleFields(),
+    maxAttempts,
+  }, "delivery_started");
 
   // Record failures for inactive endpoints.
   if (!delivery.endpoint.isActive) {
@@ -120,6 +225,14 @@ export async function processDeliveryJob(
         },
       }),
     ]);
+
+    deliveryLogger.warn({
+      ...lifecycleFields(),
+      durationMs: durationMs(),
+      httpStatusCode: null,
+      errorType: "InactiveEndpoint",
+      retryable: false,
+    }, "delivery_dead_lettered");
 
     return;
   }
@@ -191,7 +304,7 @@ export async function processDeliveryJob(
     errorMessage =
       error instanceof Error ? error.message : "Unknown delivery error";
 
-    const maxAttempts = job.opts.attempts ?? 1;
+    const maxAttempts = job.opts?.attempts ?? 1;
     const permanentFailure = isPermanentDeliveryFailure(error);
     const retriesExhausted = hasRetriesExhausted(
       job.attemptsMade,
@@ -217,8 +330,27 @@ export async function processDeliveryJob(
       }),
     ]);
 
+    deliveryLogger.warn({
+      ...lifecycleFields(),
+      durationMs: durationMs(),
+      httpStatusCode,
+      errorType: serializeError(error).name,
+      retryable: !permanentFailure && !retriesExhausted,
+      maxAttempts,
+    }, "delivery_failed");
+
     if (!permanentFailure && !finalFailure) {
+      markDeliveryProcessorFailure(error);
       throw error;
+    }
+    if (finalFailure) {
+      deliveryLogger.warn({
+        ...lifecycleFields(),
+        durationMs: durationMs(),
+        httpStatusCode,
+        errorType: serializeError(error).name,
+        maxAttempts,
+      }, "delivery_dead_lettered");
     }
     return;
   }
@@ -241,12 +373,20 @@ export async function processDeliveryJob(
       },
     }),
   ]);
+
+  deliveryLogger.info({
+    ...lifecycleFields(),
+    durationMs: durationMs(),
+    httpStatusCode,
+    maxAttempts,
+  }, "delivery_succeeded");
 }
 
 export function createDeliveryWorker(
   redisClient = redis,
   prismaClient = prisma,
   deliverer = sendWebhookRequest,
+  workerLogger: DeliveryWorkerLogger = logger,
 ) {
   const worker = new Worker<DeliveryJobData>(
     "webhook-deliveries",
@@ -260,14 +400,7 @@ export function createDeliveryWorker(
       },
     },
   );
-
-  worker.on("completed", (job) => {
-    console.log(`Delivery job ${job.id} completed`);
-  });
-
-  worker.on("failed", (job, error) => {
-    console.error(`Delivery job ${job?.id} failed:`, error.message);
-  });
+  registerDeliveryWorkerListeners(worker, workerLogger);
 
   return worker;
 }
