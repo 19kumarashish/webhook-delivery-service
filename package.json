@@ -12,7 +12,7 @@
     "start": "node dist/server.js",
     "start:worker": "node dist/workers/delivery.worker.js",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/config/logger.test.ts src/logging/context.test.ts src/middleware/request-context.middleware.test.ts src/services/delivery.service.test.ts src/services/event.service.test.ts src/services/event.errors.test.ts src/services/webhook-http-client.test.ts src/services/webhook-url.test.ts src/routes/delivery.routes.test.ts src/routes/event.routes.test.ts src/routes/webhook.routes.test.ts src/workers/delivery.worker.test.ts src/workers/retry-policy.test.ts src/health/health.service.test.ts src/routes/health.routes.test.ts receiver.test.cjs",
+    "test": "tsx --test src/config/logger.test.ts src/logging/context.test.ts src/middleware/request-context.middleware.test.ts src/services/delivery.service.test.ts src/services/event.service.test.ts src/services/event.errors.test.ts src/services/webhook-http-client.test.ts src/services/webhook-url.test.ts src/routes/delivery.routes.test.ts src/routes/event.routes.test.ts src/routes/webhook.routes.test.ts src/workers/delivery.worker.test.ts src/workers/retry-policy.test.ts src/health/health.service.test.ts src/routes/health.routes.test.ts src/metrics/metrics.service.test.ts receiver.test.cjs",
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
     "prisma:migrate": "prisma migrate dev",
@@ -32,6 +32,7 @@
   "type": "commonjs",
   "dependencies": {
     "@prisma/client": "^6.19.3",
+    "@prometheus-io/client": "^0.16.1",
     "bullmq": "^6.4.1",
     "dotenv": "^18.0.9",
     "express": "^5.3.0",
@@ -51,5 +52,8 @@
   },
   "overrides": {
     "deepmerge-ts": "^8.0.2"
-  }
+  },
+  "engines": {
+  "node": "^22 || ^24 || >=26"
+}
 }
