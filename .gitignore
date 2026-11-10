@@ -9,6 +9,7 @@ node_modules
 node_modules/
 dist/
 .env
+.env.local
 .env.*
 !.env.example
 
@@ -22,3 +23,4 @@ npm-debug.log*
 
 # Generated files
 coverage/
+.neon
