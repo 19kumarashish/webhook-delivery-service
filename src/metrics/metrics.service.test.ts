@@ -147,4 +147,10 @@ describe("MetricsService", () => {
     assert.match(await first.exportMetrics(), /^webhook_delivery_attempts_total 2(?:\.0)?$/m);
     assert.match(await second.exportMetrics(), /^webhook_delivery_attempts_total 0(?:\.0)?$/m);
   });
+
+  it("exposes the registry contentType string", () => {
+    const metrics = new MetricsService();
+    assert.equal(typeof metrics.contentType, "string");
+    assert.match(metrics.contentType, /^text\/plain/);
+  });
 });

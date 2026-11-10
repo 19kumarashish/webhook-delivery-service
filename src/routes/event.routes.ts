@@ -1,8 +1,9 @@
 
-import { Router } from "express";
+import { Router, type RequestHandler } from "express";
 import { z } from "zod";
 import { createEvent } from "../services/event.service";
 import { DuplicateIdempotencyKeyError } from "../services/event.errors";
+import { ingestionRateLimiter } from "../middleware/rate-limiter";
 
 const createEventSchema = z.object({
   eventType: z.string().min(1).max(100),
@@ -13,10 +14,11 @@ const createEventSchema = z.object({
 export function createEventRouter(
   eventCreator: typeof createEvent = createEvent,
   logError: (message: string, error: unknown) => void = console.error,
+  rateLimiter: RequestHandler = ingestionRateLimiter,
 ) {
   const router = Router();
 
-  router.post("/", async (req, res) => {
+  router.post("/", rateLimiter, async (req, res) => {
     const result = createEventSchema.safeParse(req.body);
 
     if (!result.success) {

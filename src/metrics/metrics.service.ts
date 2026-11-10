@@ -127,6 +127,10 @@ export class MetricsService {
     this.httpRequestDuration.observe(labels, metric.durationSeconds);
   }
 
+  get contentType(): string {
+    return this.registry.contentType;
+  }
+
   async exportMetrics(): Promise<string> {
     return this.registry.metrics();
   }
